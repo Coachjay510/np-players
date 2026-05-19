@@ -78,6 +78,27 @@ export function combineStats(aau, hs) {
   }
 }
 
+export function calcSkills(stats) {
+  const s = { ppg: 0, rpg: 0, apg: 0, spg: 0, bpg: 0, fg_pct: 0, ft_pct: 0, tpg: 0, fg3_pct: 0, ...stats }
+
+  const scoring    = clamp(s.ppg / 35) * 0.6 + clamp(s.fg_pct / 0.70) * 0.4
+  const threePoint = clamp((s.fg3_pct ?? 0) / 0.50)
+  const playmaking = clamp(s.apg / 12) * 0.7 + clamp(1 - s.tpg / 6) * 0.3
+  const defense    = clamp(s.spg / 4) * 0.6 + clamp(s.bpg / 4) * 0.4
+  const rebounding = clamp(s.rpg / 18)
+  const freeThrow  = clamp(s.ft_pct / 1.0)
+
+  const scale = v => Math.round(40 + v * 59)
+  return {
+    scoring:    scale(scoring),
+    threePoint: scale(threePoint),
+    playmaking: scale(playmaking),
+    defense:    scale(defense),
+    rebounding: scale(rebounding),
+    freeThrow:  scale(freeThrow),
+  }
+}
+
 export function getRatingColor(ovr) {
   if (ovr >= 90) return '#fcd34d'   // gold — elite
   if (ovr >= 80) return '#7de000'   // green — good

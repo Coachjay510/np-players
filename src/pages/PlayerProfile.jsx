@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { PhotoUpload } from '../components/player/PhotoUpload'
 import { PlayerCard3D } from '../components/avatar/PlayerCard3D'
 import { TeamSearch } from '../components/player/TeamSearch'
-import { calcOverall, getArchetype, getRatingColor, combineStats } from '../lib/ratings'
+import { calcOverall, getArchetype, getRatingColor, combineStats, calcSkills } from '../lib/ratings'
 
 const SOCIAL_ICONS = {
   instagram: '📸',
@@ -71,9 +71,10 @@ export function PlayerProfile() {
     : statSource === 'highschool' ? (hsStats ?? {})
     : (aauStats ?? {})
 
-  const ovr   = calcOverall(activeStats)
-  const arch  = getArchetype(activeStats)
-  const color = getRatingColor(ovr)
+  const ovr    = calcOverall(activeStats)
+  const arch   = getArchetype(activeStats)
+  const color  = getRatingColor(ovr)
+  const skills = calcSkills(activeStats)
 
   async function linkTeam(team) {
     await supabase
@@ -466,6 +467,42 @@ export function PlayerProfile() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* 2K Skill Ratings */}
+            <div style={{ marginBottom: 28, marginTop: 20 }}>
+              <div style={{ fontSize: 10, fontFamily: 'var(--font-m)', letterSpacing: 2, color: 'var(--text3)', marginBottom: 10, textTransform: 'uppercase' }}>
+                Skill Ratings
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[
+                  ['Scoring',    skills.scoring],
+                  ['3-Point',    skills.threePoint],
+                  ['Playmaking', skills.playmaking],
+                  ['Defense',    skills.defense],
+                  ['Rebounding', skills.rebounding],
+                  ['Free Throw', skills.freeThrow],
+                ].map(([label, val]) => {
+                  const barColor = val >= 80 ? '#fcd34d' : val >= 70 ? '#7de000' : val >= 60 ? '#38bdf8' : '#9ca3af'
+                  return (
+                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 80, fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-m)', letterSpacing: 0.5, flexShrink: 0 }}>
+                        {label}
+                      </div>
+                      <div style={{ flex: 1, height: 8, background: 'var(--bg2)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', borderRadius: 4,
+                          width: `${((val - 40) / 59) * 100}%`,
+                          background: barColor, transition: 'width .4s ease',
+                        }} />
+                      </div>
+                      <div style={{ width: 28, fontFamily: 'var(--font-d)', fontSize: 16, color: barColor, textAlign: 'right', flexShrink: 0 }}>
+                        {val}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
