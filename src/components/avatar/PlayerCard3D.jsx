@@ -1,6 +1,6 @@
 import { useRef, useState, useMemo, useEffect } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { RoundedBox, useTexture } from '@react-three/drei'
+import { RoundedBox } from '@react-three/drei'
 import * as THREE from 'three'
 import { getRatingColor } from '../../lib/ratings'
 
@@ -146,9 +146,17 @@ function buildBackTexture(stats, color) {
 }
 
 function PhotoPlane({ photoUrl }) {
-  const texture = useTexture(photoUrl)
+  const [texture, setTexture] = useState(null)
+
+  useEffect(() => {
+    const loader = new THREE.TextureLoader()
+    loader.setCrossOrigin('anonymous')
+    loader.load(photoUrl, tex => setTexture(tex))
+  }, [photoUrl])
+
+  if (!texture) return null
   return (
-    <mesh position={[0, 0.28, 0.002]}>
+    <mesh position={[0, 0.28, 0.023]}>
       <planeGeometry args={[2.2, 2.4]} />
       <meshStandardMaterial map={texture} transparent />
     </mesh>
