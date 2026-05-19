@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { PhotoUpload } from '../components/player/PhotoUpload'
-import { PlayerCard3D } from '../components/avatar/PlayerCard3D'
+import { PlayerAvatar3D } from '../components/avatar/PlayerAvatar3D'
 import { TeamSearch } from '../components/player/TeamSearch'
 import { calcOverall, getArchetype, getRatingColor, combineStats, calcSkills } from '../lib/ratings'
 
@@ -259,7 +259,7 @@ export function PlayerProfile() {
             </div>
 
             {activeTab === 'card3d' && (
-              <PlayerCard3D player={player} ovr={ovr} stats={activeStats} height={360} />
+              <PlayerAvatar3D player={player} ovr={ovr} height={460} />
             )}
 
             {activeTab === 'stats' && (
