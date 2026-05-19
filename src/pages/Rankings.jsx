@@ -3,14 +3,19 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { calcOverall, getArchetype, getRatingColor, combineStats } from '../lib/ratings'
 
-const COLS     = ['PPG', 'RPG', 'APG', 'SPG', 'BPG', 'FG%']
-const STAT_KEY = { PPG: 'ppg', RPG: 'rpg', APG: 'apg', SPG: 'spg', BPG: 'bpg', 'FG%': 'fg_pct' }
-
-function fmt(val, col) {
-  if (val == null || val === 0) return '—'
-  if (col === 'FG%') return `${Math.round(val * 100)}%`
-  return (+val).toFixed(1)
-}
+const COLS = [
+  { key: 'ovr',    label: 'OVR',   stat: null,       fmt: v => v },
+  { key: 'ppg',    label: 'PPG',   stat: 'ppg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'rpg',    label: 'RPG',   stat: 'rpg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'apg',    label: 'APG',   stat: 'apg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'spg',    label: 'SPG',   stat: 'spg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'bpg',    label: 'BPG',   stat: 'bpg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'fg_pct', label: 'FG%',   stat: 'fg_pct',   fmt: v => v != null && v > 0 ? `${Math.round(v * 100)}%` : '—' },
+  { key: 'ft_pct', label: 'FT%',   stat: 'ft_pct',   fmt: v => v != null && v > 0 ? `${Math.round(v * 100)}%` : '—' },
+  { key: 'fg3_pct',label: '3P%',   stat: 'fg3_pct',  fmt: v => v != null && v > 0 ? `${Math.round(v * 100)}%` : '—' },
+  { key: 'tpg',    label: 'TO',    stat: 'tpg',      fmt: v => v != null && v > 0 ? (+v).toFixed(1) : '—' },
+  { key: 'gp',     label: 'GP',    stat: 'gp',       fmt: v => v != null && v > 0 ? v : '—' },
+]
 
 function pickStats(allStats, source) {
   const aau = allStats.find(s => s.source === 'aau' || !s.source) ?? null
@@ -21,9 +26,11 @@ function pickStats(allStats, source) {
 }
 
 export function Rankings() {
-  const [players, setPlayers]     = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [statSource, setStatSource] = useState('aau')  // 'aau' | 'highschool' | 'combined'
+  const [players, setPlayers]       = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [statSource, setStatSource] = useState('aau')
+  const [sortKey, setSortKey]       = useState('ovr')
+  const [sortDir, setSortDir]       = useState('desc')
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -31,26 +38,37 @@ export function Rankings() {
       .from('players')
       .select('id, name, position, jersey_number, photo_url, grad_year, school_name, np_team_name, stats(*)')
       .not('name', 'is', null)
-      .then(({ data }) => {
-        setPlayers(data ?? [])
-        setLoading(false)
-      })
+      .then(({ data }) => { setPlayers(data ?? []); setLoading(false) })
   }, [])
+
+  function handleSort(key) {
+    if (sortKey === key) {
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
+  }
 
   const ranked = players
     .map(p => {
       const stats = pickStats(p.stats ?? [], statSource)
       return { ...p, activeStats: stats, ovr: calcOverall(stats) }
     })
-    .filter(p => p.ovr > 60)   // hide players with zero data under selected source
-    .sort((a, b) => b.ovr - a.ovr)
+    .filter(p => p.ovr > 60)
+    .sort((a, b) => {
+      const col = COLS.find(c => c.key === sortKey)
+      const av = col?.stat ? (a.activeStats?.[col.stat] ?? 0) : a.ovr
+      const bv = col?.stat ? (b.activeStats?.[col.stat] ?? 0) : b.ovr
+      return sortDir === 'desc' ? bv - av : av - bv
+    })
 
-  const hasHS      = players.some(p => (p.stats ?? []).some(s => s.source === 'highschool'))
-  const hasAny     = players.some(p => (p.stats ?? []).some(s => s.source === 'aau' || !s.source))
-  const hasBoth    = hasAny && hasHS
+  const hasHS   = players.some(p => (p.stats ?? []).some(s => s.source === 'highschool'))
+  const hasAny  = players.some(p => (p.stats ?? []).some(s => s.source === 'aau' || !s.source))
+  const hasBoth = hasAny && hasHS
 
   return (
-    <div style={{ paddingTop: 80, padding: '80px clamp(16px,4vw,48px) 60px', maxWidth: 1100, margin: '0 auto' }}>
+    <div style={{ paddingTop: 80, padding: '80px clamp(16px,4vw,48px) 60px', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ marginBottom: 28 }}>
         <div style={{ fontFamily: 'var(--font-m)', fontSize: 9, letterSpacing: 3, color: 'var(--green2)', marginBottom: 8, textTransform: 'uppercase' }}>
           // 2025–26 Season Rankings
@@ -60,37 +78,50 @@ export function Rankings() {
         </h1>
       </div>
 
-      {/* Source toggle */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 24, alignItems: 'center' }}>
-        <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1, marginRight: 4 }}>STATS:</span>
-        {[
-          hasAny   ? ['aau',        'AAU']      : null,
-          hasHS    ? ['highschool', 'HS']       : null,
-          hasBoth  ? ['combined',   'Combined'] : null,
-        ].filter(Boolean).map(([src, label]) => (
-          <button key={src} onClick={() => setStatSource(src)} style={{
-            padding: '5px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600,
-            border: 'none',
-            background: statSource === src ? 'var(--green)' : 'var(--bg2)',
-            color: statSource === src ? '#000' : 'var(--text2)',
-          }}>
-            {label}
-          </button>
-        ))}
+      {/* Controls row */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1 }}>STATS:</span>
+          {[
+            hasAny  ? ['aau',        'AAU']      : null,
+            hasHS   ? ['highschool', 'HS']       : null,
+            hasBoth ? ['combined',   'Combined'] : null,
+          ].filter(Boolean).map(([src, label]) => (
+            <button key={src} onClick={() => setStatSource(src)} style={{
+              padding: '5px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+              border: 'none', cursor: 'pointer',
+              background: statSource === src ? 'var(--green)' : 'var(--bg2)',
+              color: statSource === src ? '#000' : 'var(--text2)',
+            }}>{label}</button>
+          ))}
+        </div>
+
+        <div style={{ marginLeft: 'auto', fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1 }}>
+          {ranked.length} PLAYERS · CLICK ROW TO VIEW PROFILE · CLICK COLUMN TO SORT
+        </div>
       </div>
 
       {loading ? (
         <div style={{ color: 'var(--text3)', fontFamily: 'var(--font-m)', letterSpacing: 2 }}>COMPUTING…</div>
       ) : (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 900 }}>
             <thead>
               <tr style={{ background: 'var(--bg2)' }}>
                 <th style={th}>#</th>
-                <th style={{ ...th, textAlign: 'left', width: 200 }}>Player</th>
-                <th style={th}>OVR</th>
-                <th style={th}>TYPE</th>
-                {COLS.map(c => <th key={c} style={th}>{c}</th>)}
+                <th style={{ ...th, textAlign: 'left', minWidth: 200 }}>Player</th>
+                <th style={{ ...th, textAlign: 'left', minWidth: 140 }}>Team</th>
+                {COLS.map(c => (
+                  <th key={c.key} style={{ ...th, cursor: 'pointer', userSelect: 'none',
+                    color: sortKey === c.key ? 'var(--green2)' : 'var(--text3)',
+                    background: sortKey === c.key ? 'rgba(92,184,0,.06)' : undefined,
+                  }} onClick={() => handleSort(c.key)}>
+                    {c.label}
+                    {sortKey === c.key && (
+                      <span style={{ marginLeft: 3, fontSize: 8 }}>{sortDir === 'desc' ? '▼' : '▲'}</span>
+                    )}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -109,49 +140,56 @@ export function Rankings() {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(92,184,0,.06)'}
                     onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)'}
                   >
-                    <td style={{ ...td, color: 'var(--text3)', fontFamily: 'var(--font-m)', width: 48 }}>
+                    {/* Rank */}
+                    <td style={{ ...td, color: 'var(--text3)', fontFamily: 'var(--font-m)', width: 44 }}>
                       {i === 0 ? '👑' : i + 1}
                     </td>
+
+                    {/* Player */}
                     <td style={{ ...td, textAlign: 'left' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {player.photo_url
                           ? <img src={player.photo_url} alt={player.name}
-                              style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${color}40` }} />
+                              style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', objectPosition: 'top', border: `2px solid ${color}50`, flexShrink: 0 }} />
                           : <div style={{
-                              width: 32, height: 32, borderRadius: '50%',
+                              width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
                               background: `${color}20`, display: 'flex', alignItems: 'center',
                               justifyContent: 'center', fontSize: 12, fontWeight: 700, color,
-                            }}>
-                              {player.jersey_number ?? player.name?.[0]}
-                            </div>
+                            }}>{player.jersey_number ?? player.name?.[0]}</div>
                         }
                         <div>
                           <div style={{ fontWeight: 700 }}>{player.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-m)' }}>
-                            {[player.position, player.school_name].filter(Boolean).join(' · ')}
+                          <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-m)', marginTop: 1 }}>
+                            {[player.position, player.grad_year ? `'${String(player.grad_year).slice(-2)}` : null].filter(Boolean).join(' · ')}
                           </div>
                         </div>
                       </div>
                     </td>
-                    <td style={td}>
-                      <span style={{ fontFamily: 'var(--font-d)', fontSize: 22, color, display: 'block', textAlign: 'center' }}>
-                        {player.ovr}
+
+                    {/* Team */}
+                    <td style={{ ...td, textAlign: 'left' }}>
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                        {player.np_team_name ?? '—'}
                       </span>
                     </td>
-                    <td style={td}>
-                      <span style={{
-                        fontSize: 10, color, fontFamily: 'var(--font-m)',
-                        background: `${color}12`, border: `1px solid ${color}30`,
-                        borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap',
-                      }}>
-                        {arch}
-                      </span>
-                    </td>
-                    {COLS.map(c => (
-                      <td key={c} style={{ ...td, color: 'var(--text2)' }}>
-                        {fmt(player.activeStats?.[STAT_KEY[c]], c)}
-                      </td>
-                    ))}
+
+                    {/* Stat columns */}
+                    {COLS.map(c => {
+                      const raw = c.stat ? player.activeStats?.[c.stat] : player.ovr
+                      const isSort = sortKey === c.key
+                      return (
+                        <td key={c.key} style={{
+                          ...td,
+                          color: c.key === 'ovr' ? color : isSort ? 'var(--text)' : 'var(--text2)',
+                          background: isSort ? 'rgba(92,184,0,.04)' : undefined,
+                          fontFamily: c.key === 'ovr' ? 'var(--font-d)' : undefined,
+                          fontSize: c.key === 'ovr' ? 20 : 13,
+                          fontWeight: c.key === 'ovr' ? 900 : undefined,
+                        }}>
+                          {c.fmt(raw)}
+                        </td>
+                      )
+                    })}
                   </tr>
                 )
               })}
@@ -164,7 +202,7 @@ export function Rankings() {
 }
 
 const th = {
-  padding: '11px 14px',
+  padding: '11px 12px',
   fontFamily: 'var(--font-m)',
   fontSize: 9,
   letterSpacing: 1.5,
@@ -176,7 +214,7 @@ const th = {
 }
 
 const td = {
-  padding: '12px 14px',
+  padding: '11px 12px',
   textAlign: 'center',
   verticalAlign: 'middle',
 }
