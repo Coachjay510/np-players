@@ -473,8 +473,8 @@ function PlayerFigure({ player, accentColor }) {
       </mesh>
 
       {/* ── GROUND SHADOW ── */}
-      <mesh position={[0.08, -0.106, 0.06]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ellipseGeometry args={[0.38, 0.30, 28]} />
+      <mesh position={[0.08, -0.106, 0.06]} rotation={[-Math.PI / 2, 0, 0]} scale={[1, 0.75, 1]}>
+        <circleGeometry args={[0.38, 28]} />
         <meshStandardMaterial color="#000" transparent opacity={0.20} />
       </mesh>
 
