@@ -13,7 +13,7 @@ export function AddPlayer() {
   const [pendingPath, setPendingPath] = useState(null) // storage path before player id is known
 
   const [info, setInfo] = useState({
-    name: '', position: 'Point Guard', jersey_number: '', grad_year: '', bio: '',
+    name: '', position: 'Point Guard', jersey_number: '', grad_year: '', bio: '', school_name: '',
   })
 
   const [stats, setStats] = useState({
@@ -27,6 +27,7 @@ export function AddPlayer() {
     { type: 'instagram',    label: 'Instagram',    url: '' },
     { type: 'twitter',      label: 'Twitter/X',    url: '' },
     { type: 'tiktok',       label: 'TikTok',       url: '' },
+    { type: 'youtube',      label: 'YouTube',      url: '' },
   ])
 
   function handlePhotoChange(url, path) {
@@ -52,8 +53,9 @@ export function AddPlayer() {
           position:      info.position,
           jersey_number: info.jersey_number ? +info.jersey_number : null,
           grad_year:     info.grad_year     ? +info.grad_year      : null,
-          bio:           info.bio.trim()    || null,
-          photo_url:     finalPhotoUrl      || null,
+          bio:           info.bio.trim()        || null,
+          school_name:   info.school_name.trim() || null,
+          photo_url:     finalPhotoUrl          || null,
         })
         .select()
         .single()
@@ -116,6 +118,9 @@ export function AddPlayer() {
             <input type="number" value={info.grad_year} onChange={e => setInfo(p => ({ ...p, grad_year: e.target.value }))} placeholder="2026" />
           </Field>
         </Row>
+        <Field label="High School">
+          <input value={info.school_name} onChange={e => setInfo(p => ({ ...p, school_name: e.target.value }))} placeholder="e.g. Lincoln High School" />
+        </Field>
         <Field label="Bio (optional)">
           <textarea
             rows={3}

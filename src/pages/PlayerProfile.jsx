@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase'
 import { PhotoUpload } from '../components/player/PhotoUpload'
 import { PlayerCard3D } from '../components/avatar/PlayerCard3D'
 import { TeamSearch } from '../components/player/TeamSearch'
-import { calcOverall, getArchetype, getRatingColor } from '../lib/ratings'
+import { calcOverall, getArchetype, getRatingColor, combineStats } from '../lib/ratings'
 
 const SOCIAL_ICONS = {
   instagram: '📸',
@@ -14,34 +14,71 @@ const SOCIAL_ICONS = {
   maxpreps:  '📊',
 }
 
+const STAT_ROWS = [
+  ['Points',    'ppg',    null],
+  ['Rebounds',  'rpg',    null],
+  ['Assists',   'apg',    null],
+  ['Steals',    'spg',    null],
+  ['Blocks',    'bpg',    null],
+  ['FG%',       'fg_pct', v => v != null ? `${Math.round(v * 100)}%` : '—'],
+  ['FT%',       'ft_pct', v => v != null ? `${Math.round(v * 100)}%` : '—'],
+  ['3P%',       'fg3_pct',v => v != null ? `${Math.round(v * 100)}%` : '—'],
+  ['Turnovers', 'tpg',    null],
+  ['Games',     'gp',     null],
+]
+
+const BLANK_HS = { ppg: '', rpg: '', apg: '', spg: '', bpg: '', fg_pct: '', ft_pct: '', fg3_pct: '', tpg: '', gp: '' }
+
 export function PlayerProfile() {
   const { id } = useParams()
-  const [player, setPlayer]       = useState(null)
-  const [loading, setLoading]     = useState(true)
+  const [player, setPlayer]           = useState(null)
+  const [allStats, setAllStats]       = useState([])          // all stats rows
+  const [loading, setLoading]         = useState(true)
   const [editingPhoto, setEditingPhoto]   = useState(false)
   const [linkingTeam, setLinkingTeam]     = useState(false)
   const [activeTab, setActiveTab]         = useState('card3d')
+  const [statSource, setStatSource]       = useState('aau')   // 'aau' | 'highschool' | 'combined'
+  const [addingHS, setAddingHS]           = useState(false)
+  const [hsDraft, setHsDraft]             = useState(BLANK_HS)
+  const [savingHS, setSavingHS]           = useState(false)
+  const [syncingMP, setSyncingMP]         = useState(false)
+  const [syncMsg, setSyncMsg]             = useState(null)
 
-  useEffect(() => {
-    supabase
+  async function loadPlayer() {
+    const { data } = await supabase
       .from('players')
       .select('*, stats(*), player_links(*), player_media(*), team_players(id, np_team_id)')
       .eq('id', id)
       .single()
-      .then(({ data }) => {
-        if (data) {
-          setPlayer({ ...data, stats: data.stats?.[0] ?? {} })
-        }
-        setLoading(false)
-      })
-  }, [id])
+    if (data) {
+      setPlayer(data)
+      setAllStats(data.stats ?? [])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { loadPlayer() }, [id])
+
+  // Derive per-source stats rows
+  const aauStats = allStats.find(s => s.source === 'aau' || !s.source) ?? null
+  const hsStats  = allStats.find(s => s.source === 'highschool') ?? null
+  const combined = combineStats(aauStats, hsStats)
+
+  const hasBoth = aauStats && hsStats
+
+  // Active stats based on selected source
+  const activeStats = statSource === 'combined' ? (combined ?? aauStats ?? {})
+    : statSource === 'highschool' ? (hsStats ?? {})
+    : (aauStats ?? {})
+
+  const ovr   = calcOverall(activeStats)
+  const arch  = getArchetype(activeStats)
+  const color = getRatingColor(ovr)
 
   async function linkTeam(team) {
-    // Upsert into team_players (player self-linking)
     await supabase
       .from('team_players')
       .upsert({ np_team_id: team.id, player_id: id, linked_by: 'player' }, { onConflict: 'np_team_id,player_id' })
-    // Also update the player row with the primary team name for display
     await supabase
       .from('players')
       .update({ np_team_id: team.id, np_team_name: team.display_name })
@@ -57,11 +94,51 @@ export function PlayerProfile() {
   }
 
   async function handlePhotoChange(url, path) {
-    // Show preview immediately; persist once path is confirmed (not a blob URL)
     setPlayer(p => ({ ...p, photo_url: url }))
     if (path && !url.startsWith('blob:')) {
       await supabase.from('players').update({ photo_url: url }).eq('id', id)
       setEditingPhoto(false)
+    }
+  }
+
+  async function saveHSStats() {
+    setSavingHS(true)
+    const payload = Object.fromEntries(
+      Object.entries(hsDraft)
+        .filter(([, v]) => v !== '')
+        .map(([k, v]) => [k, parseFloat(v)])
+    )
+    if (!Object.keys(payload).length) { setSavingHS(false); return }
+
+    if (hsStats) {
+      await supabase.from('stats').update({ ...payload, source: 'highschool' }).eq('id', hsStats.id)
+    } else {
+      await supabase.from('stats').insert({ player_id: id, source: 'highschool', ...payload })
+    }
+    await loadPlayer()
+    setStatSource('highschool')
+    setAddingHS(false)
+    setHsDraft(BLANK_HS)
+    setSavingHS(false)
+  }
+
+  async function syncMaxpreps() {
+    const mp = (player?.player_links ?? []).find(l => l.type === 'maxpreps')
+    if (!mp) return
+    setSyncingMP(true)
+    setSyncMsg(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-maxpreps', {
+        body: { player_id: id, url: mp.url },
+      })
+      if (error) throw error
+      setSyncMsg(data?.message ?? 'Synced!')
+      await loadPlayer()
+      setStatSource('highschool')
+    } catch (e) {
+      setSyncMsg(e.message ?? 'Sync failed')
+    } finally {
+      setSyncingMP(false)
     }
   }
 
@@ -82,27 +159,18 @@ export function PlayerProfile() {
     )
   }
 
-  const stats    = player.stats
-  const ovr      = calcOverall(stats)
-  const arch     = getArchetype(stats)
-  const color    = getRatingColor(ovr)
-  const links      = player.player_links ?? []
-  const media      = player.player_media ?? []
-  const socials    = links.filter(l => !['maxpreps', 'aau_passport'].includes(l.type))
-  const maxpreps   = links.find(l => l.type === 'maxpreps')
+  const links       = player.player_links ?? []
+  const media       = player.player_media ?? []
+  const socials     = links.filter(l => !['maxpreps', 'aau_passport'].includes(l.type))
+  const maxpreps    = links.find(l => l.type === 'maxpreps')
   const aauPassport = links.find(l => l.type === 'aau_passport')
 
-  const STAT_ROWS = [
-    ['Points',    'ppg',    null],
-    ['Rebounds',  'rpg',    null],
-    ['Assists',   'apg',    null],
-    ['Steals',    'spg',    null],
-    ['Blocks',    'bpg',    null],
-    ['FG%',       'fg_pct', v => v ? `${Math.round(v*100)}%` : '—'],
-    ['FT%',       'ft_pct', v => v ? `${Math.round(v*100)}%` : '—'],
-    ['Turnovers', 'tpg',    null],
-    ['Games',     'gp',     null],
-  ]
+  // Sub-header line: "Class of 2026 · Lincoln High · Delta Dubs Power"
+  const subParts = [
+    player.grad_year ? `Class of ${player.grad_year}` : null,
+    player.school_name || null,
+    player.np_team_name || null,
+  ].filter(Boolean)
 
   return (
     <>
@@ -112,79 +180,69 @@ export function PlayerProfile() {
         </Link>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 32, alignItems: 'start' }}>
-          {/* Left: hero + avatar */}
-          <div style={{ width: 300, flexShrink: 0 }}>
-            {/* Player photo hero */}
-            {editingPhoto
-              ? (
-                <div style={{ marginBottom: 16 }}>
-                  <PhotoUpload
-                    value={player.photo_url}
-                    onChange={handlePhotoChange}
-                    playerId={id}
-                  />
-                  <button
-                    onClick={() => setEditingPhoto(false)}
-                    style={{
-                      marginTop: 8, width: '100%', padding: '8px 0',
-                      background: 'none', border: '1px solid var(--border2)',
-                      color: 'var(--text3)', borderRadius: 8, fontSize: 12,
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <div style={{
-                  height: 320, borderRadius: 16, overflow: 'hidden', marginBottom: 16,
-                  background: `linear-gradient(160deg, ${color}14 0%, #04060a 100%)`,
-                  position: 'relative', border: `1px solid ${color}30`,
-                  cursor: 'pointer',
-                }}
-                  onClick={() => setEditingPhoto(true)}
-                >
-                  {player.photo_url
-                    ? <img src={player.photo_url} alt={player.name}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
-                    : <div style={{
-                        width: '100%', height: '100%', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', flexDirection: 'column', gap: 8,
-                      }}>
-                        <span style={{ fontSize: 40 }}>📸</span>
-                        <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: 'var(--font-m)', letterSpacing: 1 }}>
-                          ADD PHOTO
-                        </span>
-                      </div>
-                  }
-                  {/* Edit overlay */}
-                  <div style={{
-                    position: 'absolute', inset: 0,
-                    background: 'rgba(4,6,10,.5)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    opacity: 0, transition: 'opacity .2s',
-                  }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = 1}
-                    onMouseLeave={e => e.currentTarget.style.opacity = 0}
-                  >
-                    <span style={{ color: '#fff', fontFamily: 'var(--font-m)', fontSize: 11, letterSpacing: 2 }}>
-                      {player.photo_url ? '📸 CHANGE PHOTO' : '📸 UPLOAD PHOTO'}
-                    </span>
-                  </div>
-                  {/* OVR chip */}
-                  <div style={{
-                    position: 'absolute', bottom: 12, left: 12,
-                    background: 'rgba(4,6,10,.88)', backdropFilter: 'blur(10px)',
-                    borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'baseline', gap: 6,
-                    border: `1px solid ${color}40`,
-                  }}>
-                    <span style={{ fontSize: 36, fontFamily: 'var(--font-d)', color, lineHeight: 1 }}>{ovr}</span>
-                    <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1 }}>OVR</span>
-                  </div>
-                </div>
-              )
-            }
 
-            {/* Tabs: 3D Card / Stats */}
+          {/* ── Left column ── */}
+          <div style={{ width: 300, flexShrink: 0 }}>
+
+            {/* Player photo hero */}
+            {editingPhoto ? (
+              <div style={{ marginBottom: 16 }}>
+                <PhotoUpload value={player.photo_url} onChange={handlePhotoChange} playerId={id} />
+                <button onClick={() => setEditingPhoto(false)} style={{
+                  marginTop: 8, width: '100%', padding: '8px 0',
+                  background: 'none', border: '1px solid var(--border2)',
+                  color: 'var(--text3)', borderRadius: 8, fontSize: 12,
+                }}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div style={{
+                height: 320, borderRadius: 16, overflow: 'hidden', marginBottom: 16,
+                background: `linear-gradient(160deg, ${color}14 0%, #04060a 100%)`,
+                position: 'relative', border: `1px solid ${color}30`, cursor: 'pointer',
+              }}
+                onClick={() => setEditingPhoto(true)}
+              >
+                {player.photo_url
+                  ? <img src={player.photo_url} alt={player.name}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
+                  : <div style={{
+                      width: '100%', height: '100%', display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', flexDirection: 'column', gap: 8,
+                    }}>
+                      <span style={{ fontSize: 40 }}>📸</span>
+                      <span style={{ fontSize: 12, color: 'var(--text3)', fontFamily: 'var(--font-m)', letterSpacing: 1 }}>
+                        ADD PHOTO
+                      </span>
+                    </div>
+                }
+                <div style={{
+                  position: 'absolute', inset: 0, background: 'rgba(4,6,10,.5)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  opacity: 0, transition: 'opacity .2s',
+                }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                  onMouseLeave={e => e.currentTarget.style.opacity = 0}
+                >
+                  <span style={{ color: '#fff', fontFamily: 'var(--font-m)', fontSize: 11, letterSpacing: 2 }}>
+                    {player.photo_url ? '📸 CHANGE PHOTO' : '📸 UPLOAD PHOTO'}
+                  </span>
+                </div>
+                {/* OVR chip */}
+                <div style={{
+                  position: 'absolute', bottom: 12, left: 12,
+                  background: 'rgba(4,6,10,.88)', backdropFilter: 'blur(10px)',
+                  borderRadius: 10, padding: '8px 14px', display: 'flex', alignItems: 'baseline', gap: 6,
+                  border: `1px solid ${color}40`,
+                }}>
+                  <span style={{ fontSize: 36, fontFamily: 'var(--font-d)', color, lineHeight: 1 }}>{ovr}</span>
+                  <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1 }}>OVR</span>
+                </div>
+              </div>
+            )}
+
+            {/* View tabs: 3D Card / Stats */}
             <div style={{ display: 'flex', gap: 2, marginBottom: 12, background: 'var(--bg2)', borderRadius: 8, padding: 4 }}>
               {[['card3d', '🎮 3D Card'], ['stats', '📊 Stats']].map(([t, label]) => (
                 <button key={t} onClick={() => setActiveTab(t)} style={{
@@ -200,40 +258,148 @@ export function PlayerProfile() {
             </div>
 
             {activeTab === 'card3d' && (
-              <div>
-                <PlayerCard3D player={player} ovr={ovr} stats={stats} height={360} />
-              </div>
+              <PlayerCard3D player={player} ovr={ovr} stats={activeStats} height={360} />
             )}
 
             {activeTab === 'stats' && (
               <div style={{ background: 'var(--bg2)', borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                {/* Source toggle tabs */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+                  {[
+                    aauStats ? ['aau',        'AAU']      : null,
+                    hsStats  ? ['highschool', 'HS']       : null,
+                    hasBoth  ? ['combined',   'Combined'] : null,
+                  ].filter(Boolean).map(([src, label]) => (
+                    <button key={src} onClick={() => setStatSource(src)} style={{
+                      flex: 1, padding: '8px 0', border: 'none',
+                      borderBottom: statSource === src ? `2px solid ${color}` : '2px solid transparent',
+                      background: 'transparent',
+                      color: statSource === src ? color : 'var(--text3)',
+                      fontSize: 10, fontFamily: 'var(--font-m)', letterSpacing: 1, fontWeight: 700,
+                    }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Stat header row */}
+                <div style={{ padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', letterSpacing: 1, color: 'var(--text3)', textTransform: 'uppercase' }}>
-                    Season Averages
+                    {statSource === 'highschool' ? 'HS Averages' : statSource === 'combined' ? 'Combined Avg' : 'AAU Averages'}
                   </span>
                   <span style={{ fontSize: 10, color, fontFamily: 'var(--font-m)' }}>{arch}</span>
                 </div>
+
+                {/* Stat rows */}
                 {STAT_ROWS.map(([label, key, fmt]) => {
-                  const raw = stats?.[key]
-                  const val = fmt ? fmt(raw) : (raw ?? '—')
+                  const raw = activeStats?.[key]
+                  const val = fmt ? fmt(raw) : (raw != null ? (+raw).toFixed(1) : '—')
                   return (
                     <div key={key} style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       padding: '9px 14px', borderBottom: '1px solid var(--border)',
                     }}>
                       <span style={{ fontSize: 12, color: 'var(--text2)' }}>{label}</span>
-                      <span style={{ fontFamily: 'var(--font-d)', fontSize: 16, color: raw ? 'var(--text)' : 'var(--text3)' }}>
+                      <span style={{ fontFamily: 'var(--font-d)', fontSize: 16, color: raw != null ? 'var(--text)' : 'var(--text3)' }}>
                         {val}
                       </span>
                     </div>
                   )
                 })}
+
+                {/* Add / Edit HS stats */}
+                <div style={{ padding: '10px 14px' }}>
+                  {!addingHS ? (
+                    <button onClick={() => {
+                      if (hsStats) {
+                        setHsDraft({
+                          ppg: hsStats.ppg ?? '', rpg: hsStats.rpg ?? '',
+                          apg: hsStats.apg ?? '', spg: hsStats.spg ?? '',
+                          bpg: hsStats.bpg ?? '', fg_pct: hsStats.fg_pct ?? '',
+                          ft_pct: hsStats.ft_pct ?? '', fg3_pct: hsStats.fg3_pct ?? '',
+                          tpg: hsStats.tpg ?? '', gp: hsStats.gp ?? '',
+                        })
+                      }
+                      setAddingHS(true)
+                    }} style={{
+                      width: '100%', padding: '7px 0', border: '1px dashed var(--border2)',
+                      borderRadius: 7, background: 'none', color: 'var(--text3)',
+                      fontSize: 11, fontFamily: 'var(--font-m)', letterSpacing: 1,
+                    }}>
+                      {hsStats ? '✏️ EDIT HS STATS' : '+ ADD HS STATS'}
+                    </button>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: 10, fontFamily: 'var(--font-m)', letterSpacing: 1, color: 'var(--text3)', marginBottom: 8 }}>
+                        HIGH SCHOOL AVERAGES
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+                        {[
+                          ['ppg', 'PPG'], ['rpg', 'RPG'], ['apg', 'APG'], ['spg', 'SPG'],
+                          ['bpg', 'BPG'], ['tpg', 'TO/G'], ['fg_pct', 'FG% (0-1)'],
+                          ['ft_pct', 'FT% (0-1)'], ['fg3_pct', '3P% (0-1)'], ['gp', 'Games'],
+                        ].map(([key, label]) => (
+                          <div key={key}>
+                            <div style={{ fontSize: 9, color: 'var(--text3)', marginBottom: 3, fontFamily: 'var(--font-m)' }}>{label}</div>
+                            <input
+                              type="number" step="0.01" min="0"
+                              value={hsDraft[key]}
+                              onChange={e => setHsDraft(d => ({ ...d, [key]: e.target.value }))}
+                              style={{
+                                width: '100%', padding: '5px 8px',
+                                background: 'var(--bg)', border: '1px solid var(--border2)',
+                                borderRadius: 6, color: 'var(--text)', fontSize: 12,
+                                fontFamily: 'var(--font-b)',
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={saveHSStats} disabled={savingHS} style={{
+                          flex: 1, padding: '7px 0', background: 'var(--green)', border: 'none',
+                          borderRadius: 7, color: '#000', fontWeight: 800, fontSize: 11,
+                          opacity: savingHS ? 0.6 : 1,
+                        }}>
+                          {savingHS ? 'Saving…' : 'Save HS Stats'}
+                        </button>
+                        <button onClick={() => { setAddingHS(false); setHsDraft(BLANK_HS) }} style={{
+                          padding: '7px 12px', background: 'none', border: '1px solid var(--border2)',
+                          borderRadius: 7, color: 'var(--text3)', fontSize: 11,
+                        }}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* MaxPreps sync */}
+                  {maxpreps && !addingHS && (
+                    <div style={{ marginTop: 8 }}>
+                      <button onClick={syncMaxpreps} disabled={syncingMP} style={{
+                        width: '100%', padding: '7px 0', background: 'none',
+                        border: '1px solid var(--border2)', borderRadius: 7,
+                        color: '#f59e0b', fontSize: 11, fontFamily: 'var(--font-m)', letterSpacing: 1,
+                        opacity: syncingMP ? 0.6 : 1,
+                      }}>
+                        {syncingMP ? '⏳ SYNCING…' : '🔄 SYNC HS STATS FROM MAXPREPS'}
+                      </button>
+                      {syncMsg && (
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, textAlign: 'center' }}>
+                          {syncMsg}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
 
-          {/* Right: info */}
+          {/* ── Right column ── */}
           <div>
+
             {/* Name / header */}
             <div style={{ marginBottom: 24 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
@@ -252,9 +418,9 @@ export function PlayerProfile() {
               <h1 style={{ fontFamily: 'var(--font-d)', fontSize: 'clamp(36px,5vw,60px)', lineHeight: .95, letterSpacing: 1 }}>
                 {player.name}
               </h1>
-              {player.grad_year && (
+              {subParts.length > 0 && (
                 <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>
-                  Class of {player.grad_year} · Delta Dubs Basketball
+                  {subParts.join(' · ')}
                 </div>
               )}
             </div>
@@ -267,25 +433,45 @@ export function PlayerProfile() {
             )}
 
             {/* Quick stat highlights */}
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 28 }}>
-              {[['PPG', stats.ppg], ['RPG', stats.rpg], ['APG', stats.apg]].map(([label, val]) => (
-                <div key={label} style={{
-                  background: 'var(--bg2)', border: '1px solid var(--border)',
-                  borderRadius: 12, padding: '14px 20px', textAlign: 'center', minWidth: 80,
-                }}>
-                  <div style={{ fontFamily: 'var(--font-d)', fontSize: 32, color, lineHeight: 1 }}>
-                    {val != null ? (+val).toFixed(1) : '—'}
-                  </div>
-                  <div style={{ fontSize: 9, fontFamily: 'var(--font-m)', letterSpacing: 2, color: 'var(--text3)', marginTop: 4 }}>
+            <div style={{ marginBottom: 8 }}>
+              {/* Source pills */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                {[
+                  aauStats ? ['aau',        'AAU']      : null,
+                  hsStats  ? ['highschool', 'HS']       : null,
+                  hasBoth  ? ['combined',   'Combined'] : null,
+                ].filter(Boolean).map(([src, label]) => (
+                  <button key={src} onClick={() => setStatSource(src)} style={{
+                    padding: '3px 10px', borderRadius: 20, border: 'none', fontSize: 10,
+                    fontFamily: 'var(--font-m)', letterSpacing: 1, fontWeight: 700,
+                    background: statSource === src ? color : 'var(--bg2)',
+                    color: statSource === src ? '#000' : 'var(--text3)',
+                  }}>
                     {label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {[['PPG', activeStats?.ppg], ['RPG', activeStats?.rpg], ['APG', activeStats?.apg]].map(([label, val]) => (
+                  <div key={label} style={{
+                    background: 'var(--bg2)', border: '1px solid var(--border)',
+                    borderRadius: 12, padding: '14px 20px', textAlign: 'center', minWidth: 80,
+                  }}>
+                    <div style={{ fontFamily: 'var(--font-d)', fontSize: 32, color, lineHeight: 1 }}>
+                      {val != null ? (+val).toFixed(1) : '—'}
+                    </div>
+                    <div style={{ fontSize: 9, fontFamily: 'var(--font-m)', letterSpacing: 2, color: 'var(--text3)', marginTop: 4 }}>
+                      {label}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             {/* Profiles & Links */}
             {(socials.length > 0 || maxpreps || aauPassport) && (
-              <div style={{ marginBottom: 28 }}>
+              <div style={{ marginBottom: 28, marginTop: 28 }}>
                 <div style={{ fontSize: 10, fontFamily: 'var(--font-m)', letterSpacing: 2, color: 'var(--text3)', marginBottom: 10, textTransform: 'uppercase' }}>
                   Profiles & Links
                 </div>
@@ -346,10 +532,7 @@ export function PlayerProfile() {
                   <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
                     Search for your NextPlay team to link your profile:
                   </div>
-                  <TeamSearch
-                    placeholder="Search NextPlay teams…"
-                    onSelect={linkTeam}
-                  />
+                  <TeamSearch placeholder="Search NextPlay teams…" onSelect={linkTeam} />
                   {linkingTeam && (
                     <button onClick={() => setLinkingTeam(false)} style={{
                       marginTop: 8, background: 'none', border: 'none',

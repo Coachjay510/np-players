@@ -57,6 +57,27 @@ export function getArchetype(stats) {
   return 'Role Player'
 }
 
+export function combineStats(aau, hs) {
+  if (!aau && !hs) return null
+  if (!aau) return { ...hs, source: 'combined' }
+  if (!hs)  return { ...aau, source: 'combined' }
+  const total = (aau.gp || 0) + (hs.gp || 0)
+  if (!total) return null
+  const w = (a, b) => ((a || 0) * (aau.gp || 0) + (b || 0) * (hs.gp || 0)) / total
+  return {
+    gp: total, source: 'combined',
+    ppg:    w(aau.ppg,    hs.ppg),
+    rpg:    w(aau.rpg,    hs.rpg),
+    apg:    w(aau.apg,    hs.apg),
+    spg:    w(aau.spg,    hs.spg),
+    bpg:    w(aau.bpg,    hs.bpg),
+    tpg:    w(aau.tpg,    hs.tpg),
+    fg_pct: w(aau.fg_pct, hs.fg_pct),
+    ft_pct: w(aau.ft_pct, hs.ft_pct),
+    fg3_pct:w(aau.fg3_pct,hs.fg3_pct),
+  }
+}
+
 export function getRatingColor(ovr) {
   if (ovr >= 90) return '#fcd34d'   // gold — elite
   if (ovr >= 80) return '#7de000'   // green — good

@@ -1,44 +1,82 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { calcOverall, getArchetype, getRatingColor } from '../lib/ratings'
+import { calcOverall, getArchetype, getRatingColor, combineStats } from '../lib/ratings'
+
+const COLS     = ['PPG', 'RPG', 'APG', 'SPG', 'BPG', 'FG%']
+const STAT_KEY = { PPG: 'ppg', RPG: 'rpg', APG: 'apg', SPG: 'spg', BPG: 'bpg', 'FG%': 'fg_pct' }
+
+function fmt(val, col) {
+  if (val == null || val === 0) return '—'
+  if (col === 'FG%') return `${Math.round(val * 100)}%`
+  return (+val).toFixed(1)
+}
+
+function pickStats(allStats, source) {
+  const aau = allStats.find(s => s.source === 'aau' || !s.source) ?? null
+  const hs  = allStats.find(s => s.source === 'highschool') ?? null
+  if (source === 'combined') return combineStats(aau, hs) ?? aau ?? {}
+  if (source === 'highschool') return hs ?? {}
+  return aau ?? {}
+}
 
 export function Rankings() {
-  const [players, setPlayers] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [players, setPlayers]     = useState([])
+  const [loading, setLoading]     = useState(true)
+  const [statSource, setStatSource] = useState('aau')  // 'aau' | 'highschool' | 'combined'
   const navigate = useNavigate()
 
   useEffect(() => {
     supabase
       .from('players')
-      .select('*, stats(*)')
+      .select('id, name, position, jersey_number, photo_url, grad_year, school_name, np_team_name, stats(*)')
+      .not('name', 'is', null)
       .then(({ data }) => {
-        const withOvr = (data ?? [])
-          .map(p => ({ ...p, stats: p.stats?.[0] ?? {}, ovr: calcOverall(p.stats?.[0] ?? {}) }))
-          .sort((a, b) => b.ovr - a.ovr)
-        setPlayers(withOvr)
+        setPlayers(data ?? [])
         setLoading(false)
       })
   }, [])
 
-  const COLS = ['PPG', 'RPG', 'APG', 'SPG', 'BPG', 'FG%']
-  const statKey = { PPG: 'ppg', RPG: 'rpg', APG: 'apg', SPG: 'spg', BPG: 'bpg', 'FG%': 'fg_pct' }
+  const ranked = players
+    .map(p => {
+      const stats = pickStats(p.stats ?? [], statSource)
+      return { ...p, activeStats: stats, ovr: calcOverall(stats) }
+    })
+    .filter(p => p.ovr > 55)   // hide players with zero data under selected source
+    .sort((a, b) => b.ovr - a.ovr)
 
-  function fmt(val, col) {
-    if (val == null || val === 0) return '—'
-    if (col === 'FG%') return `${Math.round(val * 100)}%`
-    return (+val).toFixed(1)
-  }
+  const hasHS      = players.some(p => (p.stats ?? []).some(s => s.source === 'highschool'))
+  const hasAny     = players.some(p => (p.stats ?? []).some(s => s.source === 'aau' || !s.source))
+  const hasBoth    = hasAny && hasHS
 
   return (
     <div style={{ paddingTop: 80, padding: '80px clamp(16px,4vw,48px) 60px', maxWidth: 1100, margin: '0 auto' }}>
-      <div style={{ marginBottom: 32 }}>
+      <div style={{ marginBottom: 28 }}>
         <div style={{ fontFamily: 'var(--font-m)', fontSize: 9, letterSpacing: 3, color: 'var(--green2)', marginBottom: 8, textTransform: 'uppercase' }}>
           // 2025–26 Season Rankings
         </div>
         <h1 style={{ fontFamily: 'var(--font-d)', fontSize: 'clamp(36px,6vw,64px)', lineHeight: .9, letterSpacing: 1 }}>
           PLAYER RANKINGS
         </h1>
+      </div>
+
+      {/* Source toggle */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 24, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, fontFamily: 'var(--font-m)', color: 'var(--text3)', letterSpacing: 1, marginRight: 4 }}>STATS:</span>
+        {[
+          hasAny   ? ['aau',        'AAU']      : null,
+          hasHS    ? ['highschool', 'HS']       : null,
+          hasBoth  ? ['combined',   'Combined'] : null,
+        ].filter(Boolean).map(([src, label]) => (
+          <button key={src} onClick={() => setStatSource(src)} style={{
+            padding: '5px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+            border: 'none',
+            background: statSource === src ? 'var(--green)' : 'var(--bg2)',
+            color: statSource === src ? '#000' : 'var(--text2)',
+          }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {loading ? (
@@ -56,9 +94,9 @@ export function Rankings() {
               </tr>
             </thead>
             <tbody>
-              {players.map((player, i) => {
+              {ranked.map((player, i) => {
                 const color = getRatingColor(player.ovr)
-                const arch  = getArchetype(player.stats)
+                const arch  = getArchetype(player.activeStats)
                 return (
                   <tr
                     key={player.id}
@@ -90,18 +128,17 @@ export function Rankings() {
                         <div>
                           <div style={{ fontWeight: 700 }}>{player.name}</div>
                           <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--font-m)' }}>
-                            {player.position ?? ''}
+                            {[player.position, player.school_name].filter(Boolean).join(' · ')}
                           </div>
                         </div>
                       </div>
                     </td>
-                    <td style={{ ...td }}>
-                      <span style={{
-                        fontFamily: 'var(--font-d)', fontSize: 22, color,
-                        display: 'block', textAlign: 'center',
-                      }}>{player.ovr}</span>
+                    <td style={td}>
+                      <span style={{ fontFamily: 'var(--font-d)', fontSize: 22, color, display: 'block', textAlign: 'center' }}>
+                        {player.ovr}
+                      </span>
                     </td>
-                    <td style={{ ...td }}>
+                    <td style={td}>
                       <span style={{
                         fontSize: 10, color, fontFamily: 'var(--font-m)',
                         background: `${color}12`, border: `1px solid ${color}30`,
@@ -112,7 +149,7 @@ export function Rankings() {
                     </td>
                     {COLS.map(c => (
                       <td key={c} style={{ ...td, color: 'var(--text2)' }}>
-                        {fmt(player.stats?.[statKey[c]], c)}
+                        {fmt(player.activeStats?.[STAT_KEY[c]], c)}
                       </td>
                     ))}
                   </tr>
