@@ -32,7 +32,8 @@ const BLANK_HS = { ppg: '', rpg: '', apg: '', spg: '', bpg: '', fg_pct: '', ft_p
 export function PlayerProfile() {
   const { id } = useParams()
   const [player, setPlayer]           = useState(null)
-  const [allStats, setAllStats]       = useState([])          // all stats rows
+  const [allStats, setAllStats]       = useState([])
+  const [gameLogs, setGameLogs]       = useState([])
   const [loading, setLoading]         = useState(true)
   const [editingPhoto, setEditingPhoto]   = useState(false)
   const [linkingTeam, setLinkingTeam]     = useState(false)
@@ -54,6 +55,13 @@ export function PlayerProfile() {
       setPlayer(data)
       setAllStats(data.stats ?? [])
     }
+    const { data: logs } = await supabase
+      .from('player_game_logs')
+      .select('*')
+      .eq('player_id', id)
+      .order('game_date', { ascending: false })
+      .limit(15)
+    setGameLogs(logs ?? [])
     setLoading(false)
   }
 
@@ -245,7 +253,7 @@ export function PlayerProfile() {
 
             {/* View tabs: 3D Card / Stats */}
             <div style={{ display: 'flex', gap: 2, marginBottom: 12, background: 'var(--bg2)', borderRadius: 8, padding: 4 }}>
-              {[['card3d', '🎮 3D Card'], ['stats', '📊 Stats']].map(([t, label]) => (
+              {[['card3d', '🎮 Card'], ['stats', '📊 Stats'], ['games', '🏀 Games']].map(([t, label]) => (
                 <button key={t} onClick={() => setActiveTab(t)} style={{
                   flex: 1, padding: '8px 0', border: 'none', borderRadius: 6,
                   background: activeTab === t ? 'var(--green)' : 'transparent',
@@ -394,6 +402,55 @@ export function PlayerProfile() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'games' && (
+              <div style={{ background: 'var(--bg2)', borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                {gameLogs.length === 0 ? (
+                  <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text3)', fontFamily: 'var(--font-m)', fontSize: 11, letterSpacing: 1 }}>
+                    NO GAME LOGS YET
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border2)' }}>
+                          {['DATE', 'OPP', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'TO', 'FG', '3P', 'FT'].map(h => (
+                            <th key={h} style={glTh}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gameLogs.map((g, i) => {
+                          const fgStr  = g.fg_made  != null ? `${g.fg_made}-${g.fg_att}`  : '—'
+                          const fg3Str = g.fg3_made != null ? `${g.fg3_made}-${g.fg3_att}` : '—'
+                          const ftStr  = g.ft_made  != null ? `${g.ft_made}-${g.ft_att}`  : '—'
+                          const hiPts  = g.pts >= 20
+                          return (
+                            <tr key={g.id} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)' }}>
+                              <td style={glTd}>{g.game_date ? new Date(g.game_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
+                              <td style={{ ...glTd, textAlign: 'left', fontWeight: 600, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {g.opponent ?? '—'}
+                              </td>
+                              <td style={{ ...glTd, color: hiPts ? color : 'var(--text)', fontWeight: hiPts ? 800 : 400, fontFamily: hiPts ? 'var(--font-d)' : undefined }}>
+                                {g.pts ?? '—'}
+                              </td>
+                              <td style={glTd}>{g.reb ?? '—'}</td>
+                              <td style={glTd}>{g.ast ?? '—'}</td>
+                              <td style={glTd}>{g.stl ?? '—'}</td>
+                              <td style={glTd}>{g.blk ?? '—'}</td>
+                              <td style={{ ...glTd, color: g.turnovers >= 4 ? '#f87171' : 'var(--text2)' }}>{g.turnovers ?? '—'}</td>
+                              <td style={{ ...glTd, color: 'var(--text3)' }}>{fgStr}</td>
+                              <td style={{ ...glTd, color: 'var(--text3)' }}>{fg3Str}</td>
+                              <td style={{ ...glTd, color: 'var(--text3)' }}>{ftStr}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -608,6 +665,17 @@ export function PlayerProfile() {
       </div>
     </>
   )
+}
+
+const glTh = {
+  padding: '9px 10px', fontFamily: 'var(--font-m)', fontSize: 9,
+  letterSpacing: 1.5, color: 'var(--text3)', textTransform: 'uppercase',
+  textAlign: 'center', whiteSpace: 'nowrap',
+}
+
+const glTd = {
+  padding: '10px 10px', textAlign: 'center',
+  verticalAlign: 'middle', color: 'var(--text2)',
 }
 
 function linkBtn(color) {
