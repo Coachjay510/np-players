@@ -41,7 +41,7 @@ export function calcOverall(stats) {
   const raw = Object.keys(WEIGHTS).reduce((sum, k) => sum + WEIGHTS[k] * norm[k], 0)
 
   // Scale 0–1 → 55–99 (nobody is below 55, nobody is 100)
-  return Math.round(55 + raw * 44)
+  return Math.round(60 + raw * 39)
 }
 
 function clamp(v) { return Math.min(1, Math.max(0, v || 0)) }

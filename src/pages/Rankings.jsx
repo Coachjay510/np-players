@@ -42,7 +42,7 @@ export function Rankings() {
       const stats = pickStats(p.stats ?? [], statSource)
       return { ...p, activeStats: stats, ovr: calcOverall(stats) }
     })
-    .filter(p => p.ovr > 55)   // hide players with zero data under selected source
+    .filter(p => p.ovr > 60)   // hide players with zero data under selected source
     .sort((a, b) => b.ovr - a.ovr)
 
   const hasHS      = players.some(p => (p.stats ?? []).some(s => s.source === 'highschool'))
